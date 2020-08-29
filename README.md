@@ -1,11 +1,11 @@
 # yam
-A simple application that notifies me of some very basic information via slack.
+A simple application that sends notifications to slack.
 
 So far this has only two abilities: 
 - connect to a set of URLs and log the status code
 - connect to a postgres database, run a set of queries that return a single integer value and log the return value
 
-The app will log to stdout and to a slack url.
+The app will log to stdout and to a slack url. To enable slack notifications you you have to create a slack app and obtain an incoming webhook as documented here: https://api.slack.com/messaging/webhooks
 
 To configure the app, the YAM_CONFIG_FILE environment variable has to be set to the location of a toml file
 
