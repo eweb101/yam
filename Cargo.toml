@@ -14,7 +14,7 @@ path = "src/lib.rs"
 
 [dependencies]
 async-std = { version = "1.6.3", features = ["attributes"] }
-sqlx = { version = "0.4.0-beta.1", features = ["offline","postgres", "chrono"] }
+sqlx = { version = "0.4.0-beta.1", features = ["mysql","postgres"] }
 serde = { version = "1.0.115", features = ["derive"] }
 http-types = "2.4.0"
 http-client = "4.0.0"

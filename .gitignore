@@ -2,4 +2,3 @@
 monitor.yml
 .env
 src/*.swp
-Dockerfile

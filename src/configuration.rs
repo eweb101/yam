@@ -1,5 +1,4 @@
 use async_std::fs;
-use async_std;
 use toml::{Value};
 
 #[derive(Clone)]
@@ -10,64 +9,37 @@ pub struct Configuration {
     pub database_url: Option<String>,
     pub monitor_urls: Option<Vec<String>>,
     pub db_queries: Option<Vec<(String,String)>>,
+    pub log_files: Option<Vec<(String,String,String)>>, //name, path, regex
 }
 
 impl Configuration {
     pub async fn from_filename(filename: &str) -> Result<Configuration,String>  {
-        let s = fs::read_to_string(filename).await;
-        let s = match s { 
-            Err(e) => return Err(format!("Could not open config file: {}",e.to_string())),
-            Ok(s) => s
-        };
+        let s = fs::read_to_string(filename).await.map_err(|e| e.to_string())?;
+        
         Configuration::from_string(&s).await
     }
 
     pub async fn from_string(s: &str) -> Result<Configuration, String> {
-        let config: Value = match toml::from_str(s) {
-            Err(e) => return Err(format!("Could  not parse config file:{}",e)),
-            Ok(c) => c
-        };
+        let config: Value = toml::from_str(s).map_err(|e| format!("Could not parse config file:{}",e))?;
 
-        let database_url = match config.get("DATABASE_URL") {
-            None => None,
-            Some(s) => {
-                match s.as_str() {
-                    None => None,
-                    Some(s) => Some(s.to_string())
-                }
-            }
-        };
+        let database_url = config.get("DATABASE_URL")
+                                .and_then(|s| s.as_str())
+                                .map(|s| s.to_string());
 
-        let slack_url = match config.get("SLACK_URL") {
-            None => None,
-            Some(s) => {
-                match s.as_str() {
-                    None => None,
-                    Some(s) => Some(s.to_string())
-                }
-            }
-        };
-
+        let slack_url = config.get("SLACK_URL")
+                                .and_then(|s| s.as_str())
+                                .map(|s| s.to_string());
         
-        let resend_status_minutes = match config.get("RESEND_MINUTES") {
-            None => return Err("RESEND_MINUTES is not set in config file".to_string()),
-            Some(s) => s
-        };
+        let resend_status_minutes = config.get("RESEND_MINUTES")
+            .ok_or("RESEND_MINUTES is not set in config file")?
+            .as_integer()
+            .ok_or("RESEND_MINUTES is not an integer")?;
 
-        let resend_status_minutes = match resend_status_minutes.as_integer() {
-            None => return Err("RESEND_MINUTES is not an integer".to_string()),
-            Some(s) => s
-        };
-        let sleep_seconds = match config.get("SLEEP_SECONDS") {
-            None => return Err("SLEEP_SECONDS is not set in config file".to_string()),
-            Some(s) => s
-        };
+        let sleep_seconds = config.get("SLEEP_SECONDS")
+            .ok_or("SLEEP_SECONDS is not set in config file")?
+            .as_integer()
+            .ok_or("SLEEP_SECONDS is not an integer")?;
 
-        let sleep_seconds = match sleep_seconds.as_integer() {
-            None => return Err("SLEEP_SECONDS is not an integer".to_string()),
-            Some(s) => s
-        };
-            
         let monitor_urls = match config.get("MONITOR_URLS") {
             None => {
                 log::info!("MONITOR_URLS not found. Web Monitoring not configured");
@@ -102,7 +74,7 @@ impl Configuration {
             },
             Some(yaml) => { //db_queries is set in the file but we don't know if it's an array yet
                 match yaml.as_array() {
-                    None => return Err(format!("DB_QUERIES is not an array. Reading configuration file failed")),
+                    None => return Err("DB_QUERIES is not an array. Reading configuration file failed".to_string()),
                     Some(toml_vec) => { //this is a vector of toml Values. we have to convert to strings
                         let ret_vec: Result<Vec<_>, _> = toml_vec.iter().map(|yam| {
                             match yam.as_array() {
@@ -119,13 +91,38 @@ impl Configuration {
             }
         };
 
+        let log_files = match config.get("LOG_FILES") {
+            None => {
+                log::info!("LOG_FILES not found. Logfile Monitoring not configured");
+                None
+            },
+            Some(yaml) => { //LOG_FILES is set in the config file but we don't know if it's an array yet
+                match yaml.as_array() {
+                    None => return Err("LOG_FILES is not an array. Reading configuration file failed".to_string()),
+                    Some(toml_vec) => { //this is a vector of toml Values. we have to convert to strings
+                        let ret_vec: Result<Vec<_>, _> = toml_vec.iter().map(|yam| {
+                            match yam.as_array() {
+                                None => Err(format!("Could not read db_query:{},",yam)),
+                                Some(v) => Ok((v[0].as_str().unwrap().to_string(),v[1].as_str().unwrap().to_string(),v[2].as_str().unwrap().to_string()))
+                            }
+                        }).collect();
+                        match ret_vec {
+                            Ok(rv) => Some(rv),
+                            Err(e) => return Err(e)
+                        }
+                    }
+                }
+            }
+        };
+
         let config = Configuration {
             sleep_seconds: sleep_seconds as u64,
             resend_status_minutes: resend_status_minutes as u64,
-            slack_url: slack_url,
-            database_url: database_url,
-            monitor_urls: monitor_urls,
-            db_queries: db_queries,
+            slack_url,
+            database_url,
+            monitor_urls,
+            db_queries,
+            log_files,
         };
 
         log::info!("Monitoring will be performed every {} seconds.",sleep_seconds);
