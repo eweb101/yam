@@ -1,4 +1,4 @@
 /target
-monitor.yml
+monitor.toml
 .env
 src/*.swp

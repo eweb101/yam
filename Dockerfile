@@ -17,9 +17,9 @@ RUN set -x\
 
 FROM debian:buster-slim
 RUN apt-get update \
-    && apt-get install -y libssl-dev\
+    && apt-get install -y libssl-dev curl\
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/cargo/bin/yam /usr/local/bin/yam
-CMD ["boat_maintenance"]
+CMD ["yam"]
 
 
