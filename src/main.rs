@@ -1,4 +1,4 @@
-use futures::try_join;
+use futures::join;
 use std::sync::Arc;
 use async_std::task;
 use yam_lib::configuration::Configuration;
@@ -47,8 +47,8 @@ async fn main() {
         Ok(t) => t
     };*/
     
-    let res = try_join!(handle1,handle2,handle3);
-    if let Err(e) = res {
+    let _res = join!(handle1,handle2,handle3);
+/*    if let Err(e) = res {
         log::error!("{}",&e);
-    }
+    }*/
 }
