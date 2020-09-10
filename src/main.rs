@@ -1,10 +1,18 @@
-use futures::join;
-use std::sync::Arc;
+//use futures::join;
+use std::{
+        sync::{
+            Arc,
+            mpsc::{
+                channel,
+            }
+        },
+};
 use async_std::task;
 use yam_lib::configuration::Configuration;
 use yam_lib::mysql_mon::mysql_mon_start;
 use yam_lib::web_mon::web_mon_start;
 use yam_lib::log_mon::log_mon_start;
+use yam_lib::slack::start_slack_poster;
 
 
 
@@ -32,23 +40,42 @@ async fn main() {
     };
 
     let config_arc = Arc::new(config);
-    let config_arc2 = config_arc.clone();
-    let config_arc3 = config_arc.clone();
+    let (slack_tx, slack_rx) = channel();
 
-    let handle1 = task::spawn(async move {
-        mysql_mon_start(config_arc).await });
-    let handle2 = task::spawn(async move {
-        web_mon_start(config_arc2).await});
-    let handle3 = task::spawn(async move {
-        log_mon_start(config_arc3).await});
-    
-    /*let log_tasks = match log_mon_start(config_arc3) {
+    let mut handles = Vec::new();
+
+    if config_arc.is_db_configured() {
+        let ca = config_arc.clone();
+        let tx = slack_tx.clone();
+        let handle = task::spawn(async move {
+            mysql_mon_start(ca,tx).await});
+        handles.push(handle);
+    }
+    if config_arc.is_slack_configured() {
+        let su = config_arc.slack_url.as_ref().unwrap().clone();
+        let handle = task::spawn(async move {
+            start_slack_poster(su, slack_rx).await});
+        handles.push(handle);
+    }
+
+    let tx = slack_tx.clone();
+    let ca = config_arc.clone();
+    let handle = task::spawn(async move {
+        web_mon_start(ca,tx).await});
+    handles.push(handle);
+
+    let ca = config_arc.clone();
+    let tx = slack_tx.clone();
+    let mut log_handles = Vec::new();
+    match log_mon_start(ca,tx) {
         Err(_) => return,
-        Ok(t) => t
-    };*/
+        Ok(h) => log_handles.extend(h)
+    };
     
-    let _res = join!(handle1,handle2,handle3);
-/*    if let Err(e) = res {
-        log::error!("{}",&e);
-    }*/
+    for h in handles {
+        let result = h.await;
+        if let Err(e) = result {
+            log::error!("{}",&e);
+        }
+    }
 }

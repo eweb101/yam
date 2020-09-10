@@ -1,8 +1,14 @@
+use regex::Regex;
+use std::{
+    thread::{
+        JoinHandle,
+    },
+    time,
+};
 use std::{
     sync::{
         Arc,
         mpsc::{
-            channel,
             Sender,
         }
     },
@@ -16,24 +22,21 @@ use std::{
     thread::{
         spawn,
     },
-    collections::{
-        HashMap,
-    }
 };
 
 use crate::configuration::Configuration;
 //use crate::slack::post_to_slack;
 //use surf::http::StatusCode;
 
-struct LogFile {
+struct DockerLogReader {
     log_name: String,
-    regex: String,
-    tx: Sender<LogEntry>,
-    reader: Box<dyn Read + Send>,
+    container_name: String,
+    regex: Regex,
+    num_hits: i32,
+    slack_tx: Sender<String>,
 }
 
-//pub fn log_mon_start(config: Arc<Configuration>) -> Result<FuturesUnordered<()>,String> {
-pub async fn log_mon_start(config: Arc<Configuration>) -> Result<(),String> {
+pub fn log_mon_start(config: Arc<Configuration>, slack_tx: Sender<String>) -> Result<Vec<JoinHandle<()>>,String> {
     let config_log_files = match &config.log_files {
         None => {
             log::error!("log_mon got passed a configuration where log_files has not been set");
@@ -42,81 +45,82 @@ pub async fn log_mon_start(config: Arc<Configuration>) -> Result<(),String> {
         Some(d) => d
     };
 
-    let (tx, rx) = channel();
-    let mut log_files: HashMap<String,i32> = config_log_files.iter().map(|q| {
-        let process = match Command::new("tail")
-            .arg("-f")
-            .arg(q.1.clone())
-            .stdout(Stdio::piped())
-            .spawn() {
-                Err(why) => panic!("couldn't spawn tail: {}", why),
-                Ok(process) => process,
-        };
-        let stdout = process.stdout.unwrap();
-        let log_file = LogFile {
-            log_name: q.0.clone(),
-            regex: q.2.clone(),
-            tx: tx.clone(),
-            reader: Box::new(stdout),
-        };
-        start_tail_thread(log_file);
-        (q.0.clone(), 0)
-    }).collect();
-    for log_name in rx {
-        let log_name = match log_name {
-            LogEntry::EOF => {
-                log::error!("tail process ended.");
-                continue;
+    let mut handles = Vec::new();
+    for log in config_log_files {
+        let tx = slack_tx.clone();
+        let regex = Regex::new(&log.2);
+        let regex = match regex {
+            Err(e) => {
+                log::error!("Could not create regex from string:{}", log.2.clone());
+                log::error!("regex error is:{}",e.to_string());
+                return Err("Could not create regex".to_string());
             },
-            LogEntry::LogName(log_name) => log_name
+            Ok(r) => r
         };
-        let num_errors = log_files.get_mut(&log_name);
-        match  num_errors {
-            None => {
-                log::error!("could not find entry for: {}", log_name);
-                continue;
-            },
-            Some(ne) => {
-                *ne += 1;
-                if *ne > 10 {
-                    *ne = 0;
-                    println!("got 10 messages for {}",log_name);
-                }
-                println!("got {} messages for {}",ne,log_name);
-            }
+        let mut lf = DockerLogReader {
+            log_name: log.0.clone(),
+            container_name: log.1.clone(),
+            regex: regex,
+            num_hits: 0,
+            slack_tx: tx,    
+        };
+
+        handles.push(spawn(move || lf.start_docker_thread()))
+    }
+    Ok(handles)
+}
+
+impl DockerLogReader {
+    fn handle_slack(&mut self) {
+        self.num_hits += 1;
+        if let Err(e) = self.slack_tx.send(format!("{} received {} hits.",self.log_name, self.num_hits)) {
+            log::error!("DockerLogReader could not send to slack:{}",e.to_string());
         }
     }
+
+    fn get_reader(&self) -> Box<dyn Read> {
+        let process = match Command::new("docker")
+            .arg("logs")
+            .arg("-f")
+            .arg(&self.container_name)
+            .stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn() {
+                Err(why) => panic!("couldn't spawn docker logs: {}", why),
+                Ok(process) => process,
+        };
+        Box::new(process.stderr.unwrap())
+    }
         
-    Ok(())
-}
+    fn start_docker_thread(&mut self) {
+        let mut reader = self.get_reader();
 
-#[derive(Debug)]
-enum LogEntry {
-    LogName(String),
-    EOF,
-}
-
-fn start_tail_thread(mut log_file: LogFile) {
-    spawn(move || {
         let mut buf = Vec::new();
         let mut byte = [0u8];
         loop {
-            match log_file.reader.read(&mut byte) {
+            match reader.read(&mut byte) {
                 Ok(0) => {
-                    let _ = log_file.tx.send(LogEntry::EOF); //ejw fix this
-                    break;
+                    log::error!("docker log process ended");
+                    let fifteen_secs = time::Duration::from_secs(15);
+                    std::thread::sleep(fifteen_secs);
+                    reader = self.get_reader();
+                    continue;
                  },
                  Ok(_) => {
                     if byte[0] == 0x0A {
-                        log_file.tx.send(match String::from_utf8(buf.clone()) {
-                            Ok(_) => LogEntry::LogName(log_file.log_name.clone()),
-                            Err(err) => {
-                                log::error!("Error reading character. {}",err.to_string());
-                                continue
-                            }
-                         })
-                         .unwrap();
-                         buf.clear()
+                        let log_msg = String::from_utf8(buf.clone());
+                        match log_msg {
+                            Err(e) => {
+                                log::error!("Error turning log message into string:{}",e.to_string());
+                                continue;
+                            },
+                            Ok(lm) if self.regex.is_match(&lm) => {
+                                log::debug!("Matched this entry: {}",lm.to_string());
+                                self.handle_slack();
+                            },
+                            Ok(_) => {} //regex not matched
+                        }
+                        buf.clear()
                      } 
                      else {
                         buf.push(byte[0])
@@ -128,5 +132,5 @@ fn start_tail_thread(mut log_file: LogFile) {
                  }
            }
         }
-    });
+    }
 }

@@ -5,10 +5,14 @@ use std::{
             Duration,
             Instant,
         },
-        sync::Arc,
-    };
+        sync::{
+            Arc,
+            mpsc::{
+                Sender,
+            }
+        },
+};
 use crate::configuration::Configuration;
-use crate::slack::post_to_slack;
 
 struct DbQuery {
     query_name: String,
@@ -16,7 +20,7 @@ struct DbQuery {
     db_value: Option<i64>,
 }
 
-pub async fn database_mon_start(config: Arc<Configuration>) -> Result<(),String> {
+pub async fn database_mon_start(config: Arc<Configuration>, slack_tx: Sender<String>) -> Result<(),String> {
     let database_url = match &config.database_url {
         None => {
             log::error!("database_mon got passed a configuration where database_url has not been set");
@@ -83,8 +87,9 @@ pub async fn database_mon_start(config: Arc<Configuration>) -> Result<(),String>
                 //only log to slack if this is the first time, the value has changed, or do_slack is true
                 if db_query.db_value.is_none() || (current_db_value != db_query.db_value.unwrap()) || do_slack {
                     db_query.db_value = Some(current_db_value);
-        
-                    post_to_slack(&config, &format!("{}:{}", db_query.query_name, current_db_value)).await;
+                    if let Err(e) = slack_tx.send(format!("{}:{}", db_query.query_name, current_db_value)) {
+                        log::error!("Could not send to slack:{}",e.to_string())
+                    }
                 }
             }
         }

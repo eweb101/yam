@@ -5,10 +5,14 @@ use std::{
             Duration,
             Instant,
         },
-        sync::Arc,
-    };
+        sync::{
+            Arc,
+            mpsc::{
+                Sender,
+            }
+        },
+};
 use crate::configuration::Configuration;
-use crate::slack::post_to_slack;
 
 struct DbQuery {
     query_name: String,
@@ -16,24 +20,14 @@ struct DbQuery {
     db_value: Option<i64>,
 }
 
-pub async fn mysql_mon_start(config: Arc<Configuration>) -> Result<(),String> {
-    let database_url = match &config.database_url {
-        None => {
-            log::error!("database_mon got passed a configuration where database_url has not been set");
-            return Err("database url is not set".to_string())
-        },
-        Some(d) => d
-    };
-
-    let config_db_queries = match &config.db_queries {
-        None => {
-            log::error!("database_mon got passed a configuration where db_queries has not been set");
-            return Err("db_queries is not set".to_string())
-        },
-        Some(d) => d
-    };
-
+pub async fn mysql_mon_start(config: Arc<Configuration>,slack_tx: Sender<String>) -> Result<(),String> {
     // Create a connection pool
+    if !config.is_db_configured() {
+        log::error!("database was passed a configuration where database isn't enabled");
+        return Err("Database not enabled in config".to_string());
+    }
+    let database_url = config.database_url.as_ref().unwrap();
+    let db_queries = config.db_queries.as_ref().unwrap();
     let pool = MySqlPoolOptions::new()
         .max_connections(5)
         .connect(&database_url).await;
@@ -47,8 +41,8 @@ pub async fn mysql_mon_start(config: Arc<Configuration>) -> Result<(),String> {
         
     //from here on never return
     let mut now = Instant::now(); 
-    let mut do_slack = true;
-    let mut db_queries: Vec<DbQuery> = config_db_queries.iter().map(|q| {
+    let mut do_slack;
+    let mut db_queries: Vec<DbQuery> = db_queries.iter().map(|q| {
         DbQuery {
             query_name: q.0.clone(),
             query_string: q.1.clone(),
@@ -57,12 +51,10 @@ pub async fn mysql_mon_start(config: Arc<Configuration>) -> Result<(),String> {
     }).collect();
 
     loop {
-        if config.is_slack_configured() {
-            do_slack = now.elapsed().as_secs() >= config.resend_status_minutes*60;
-                if do_slack {
-                    log::info!("database_mon is resending its status");
-                    now = Instant::now()
-                }
+        do_slack = now.elapsed().as_secs() >= config.resend_status_minutes*60;
+        if do_slack {
+            log::info!("database_mon is resending its status");
+            now = Instant::now()
         }
 
         for db_query in &mut db_queries {
@@ -79,12 +71,12 @@ pub async fn mysql_mon_start(config: Arc<Configuration>) -> Result<(),String> {
     
             log::info!("Current value in database for {}: {}",db_query.query_name,current_db_value);
     
-            if config.is_slack_configured() {
-                //only log to slack if this is the first time, the value has changed, or do_slack is true
-                if db_query.db_value.is_none() || (current_db_value != db_query.db_value.unwrap()) || do_slack {
-                    db_query.db_value = Some(current_db_value);
+            //only log to slack if this is the first time, the value has changed, or do_slack is true
+            if db_query.db_value.is_none() || (current_db_value != db_query.db_value.unwrap()) || do_slack {
+                db_query.db_value = Some(current_db_value);
         
-                    post_to_slack(&config, &format!("{}:{}", db_query.query_name, current_db_value)).await;
+                if let Err(e) = slack_tx.send(format!("{}:{}", db_query.query_name, current_db_value)) {
+                    log::error!("Could not send to slack:{}",e.to_string());
                 }
             }
         }

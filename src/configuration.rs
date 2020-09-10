@@ -1,4 +1,5 @@
 use async_std::fs;
+
 use toml::{Value};
 
 #[derive(Clone)]
@@ -29,7 +30,8 @@ impl Configuration {
         let slack_url = config.get("SLACK_URL")
                                 .and_then(|s| s.as_str())
                                 .map(|s| s.to_string());
-        
+
+
         let resend_status_minutes = config.get("RESEND_MINUTES")
             .ok_or("RESEND_MINUTES is not set in config file")?
             .as_integer()
@@ -146,11 +148,11 @@ impl Configuration {
         Ok(config)
     }
 
-    pub(crate) fn is_slack_configured(&self) -> bool {
+    pub fn is_slack_configured(&self) -> bool {
         self.slack_url.is_some()
     }
 
-    fn is_db_configured(&self) -> bool {
+    pub fn is_db_configured(&self) -> bool {
         self.database_url.is_some() && self.db_queries.is_some()
     }
 

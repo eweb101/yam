@@ -4,13 +4,17 @@ use std::{
             Duration,
             Instant,
         },
-        sync::Arc,
-    };
+        sync::{
+            Arc,
+            mpsc::{
+                Sender,
+            }
+        },
+};
 use crate::configuration::Configuration;
-use crate::slack::post_to_slack;
 use surf::http::StatusCode;
 
-pub async fn web_mon_start(config: Arc<Configuration>) -> Result<(),String> {
+pub async fn web_mon_start(config: Arc<Configuration>, slack_tx: Sender<String>) -> Result<(),String> {
     if config.monitor_urls.is_none() {
         log::warn!("web monitoring is not configured");
         return Err("Web monitoring is not configured".to_string())
@@ -55,7 +59,10 @@ pub async fn web_mon_start(config: Arc<Configuration>) -> Result<(),String> {
 
             if bad_result || do_slack {
                 for res in results.iter() {
-                    post_to_slack(&config, res).await;
+                    if let Err(e) = slack_tx.send(res.to_string()) {
+                        log::error!("Could not send to slack:{}",e.to_string());
+                        continue;
+                    }
                 }
             }
         }
