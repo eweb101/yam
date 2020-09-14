@@ -44,13 +44,13 @@ async fn main() {
 
     let mut handles = Vec::new();
 
-    if config_arc.is_db_configured() {
+    /*if config_arc.is_db_configured() {
         let ca = config_arc.clone();
         let tx = slack_tx.clone();
         let handle = task::spawn(async move {
             mysql_mon_start(ca,tx).await});
         handles.push(handle);
-    }
+    }*/
     if config_arc.is_slack_configured() {
         let su = config_arc.slack_url.as_ref().unwrap().clone();
         let handle = task::spawn(async move {
@@ -60,15 +60,15 @@ async fn main() {
 
     let tx = slack_tx.clone();
     let ca = config_arc.clone();
-    let handle = task::spawn(async move {
+    /*let handle = task::spawn(async move {
         web_mon_start(ca,tx).await});
-    handles.push(handle);
+    handles.push(handle);*/
 
     let ca = config_arc.clone();
     let tx = slack_tx.clone();
     let mut log_handles = Vec::new();
     match log_mon_start(ca,tx) {
-        Err(_) => return,
+        Err(_) => log::info!("log monitor not started"),
         Ok(h) => log_handles.extend(h)
     };
     

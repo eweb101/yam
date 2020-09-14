@@ -1,10 +1,6 @@
 use regex::Regex;
-use std::{
-    thread::{
-        JoinHandle,
-    },
-    time,
-};
+use dockworker::{ContainerLogOptions, Docker};
+use std::io::prelude::*;
 use std::{
     sync::{
         Arc,
@@ -12,21 +8,15 @@ use std::{
             Sender,
         }
     },
-    process::{
-        Command,
-        Stdio,
-    },
-    io::{   
-        Read,
-    },
     thread::{
         spawn,
+        JoinHandle,
     },
 };
 
 use crate::configuration::Configuration;
 //use crate::slack::post_to_slack;
-//use surf::http::StatusCode;
+//use surf::Response;
 
 struct DockerLogReader {
     log_name: String,
@@ -79,58 +69,93 @@ impl DockerLogReader {
     }
 
     fn get_reader(&self) -> Box<dyn Read> {
-        let process = match Command::new("docker")
-            .arg("logs")
-            .arg("-f")
-            .arg(&self.container_name)
-            .stderr(Stdio::piped())
-            .stdout(Stdio::null())
-            .spawn() {
-                Err(why) => panic!("couldn't spawn docker logs: {}", why),
-                Ok(process) => process,
+        let docker = Docker::connect_with_defaults().unwrap();
+        let log_options = ContainerLogOptions {
+                stdout: true,
+                stderr: true,
+                follow: true,
+                tail:   Some(100),
+                ..ContainerLogOptions::default()
         };
-        Box::new(process.stderr.unwrap())
-    }
-        
-    fn start_docker_thread(&mut self) {
-        let mut reader = self.get_reader();
 
+        log::info!("Starting log watcher for:{}",&self.container_name);
+        let res = docker.log_container(&self.container_name, &log_options).unwrap();
+        //let mut line_reader = BufReader::new(res);
+        Box::new(res)
+
+        //let r = reader.write_all(b"http:/v1.40/containers/json");
+        //let r = reader.write_all(b"GET /v1.40/containers/json HTTP/1.1\r\nHost: 1.40\r\nUser-Agent: curl/7.68.9\r\nnAccept: gzip, deflate\r\n\r\n");
+       /* let r = reader.write_all(b"GET /v1.40/containers/mysql/logs?stderr=true HTTP/1.1\r\nHost: v1.40\r\n\r\n\r\n");
+        if let Err(e) = r {
+            println!("Error writing to docker sock:{}",e.to_string());
+            panic!("error");
+        }
+        let mut response = String::new();*/
+    }
+
+    fn read_bytes(&mut reader: Box<dyn Read>,num_bytes_to_read: i32) -> Result<Vec<u8>,()> {
         let mut buf = Vec::new();
         let mut byte = [0u8];
-        loop {
+
+        for _ in 0..num_bytes_to_read {
             match reader.read(&mut byte) {
-                Ok(0) => {
+                /*Ok(0) => {
                     log::error!("docker log process ended");
                     let fifteen_secs = time::Duration::from_secs(15);
                     std::thread::sleep(fifteen_secs);
                     reader = self.get_reader();
+                    break;
+                },*/
+                Ok(_) => {
+                    println!("byte value:{}",byte[0]);
+                    buf.push(byte[0])
+                },
+                Err(e) => {
+                    log::error!("Error reading byte:{}",e.to_string());
+                    return Err(())
+                }
+            }
+        }
+        Ok(buf)
+    }
+
+    fn start_docker_thread(&mut self) {
+        let reader = self.get_reader();
+
+        loop {
+            
+            let header = DockerLogReader::read_bytes(&mut reader,8);
+            let header = match header {
+                Err(_) => {
+                    log::error!("failure reading header. restart?");
+                     continue;
+                },
+                Ok(s) => s
+            };
+            let log_entry_size = header[7] as i32;
+
+            log::info!("number of data bytes to read:{}",log_entry_size);
+
+            let log_entry = DockerLogReader::read_bytes(reader,log_entry_size);
+            let log_entry = match log_entry {
+                Err(_) => {
+                    log::error!("failure reading. log entry?");
                     continue;
-                 },
-                 Ok(_) => {
-                    if byte[0] == 0x0A {
-                        let log_msg = String::from_utf8(buf.clone());
-                        match log_msg {
-                            Err(e) => {
-                                log::error!("Error turning log message into string:{}",e.to_string());
-                                continue;
-                            },
-                            Ok(lm) if self.regex.is_match(&lm) => {
-                                log::debug!("Matched this entry: {}",lm.to_string());
-                                self.handle_slack();
-                            },
-                            Ok(_) => {} //regex not matched
-                        }
-                        buf.clear()
-                     } 
-                     else {
-                        buf.push(byte[0])
-                     }
-                 },
-                 Err(error) => {
-                    log::error!("Error reading character. {}",error.to_string());
-                    continue
-                 }
-           }
+                },
+                Ok(s) => s
+            };
+            let log_msg = String::from_utf8(log_entry.clone());
+            match log_msg {
+                Err(e) => {
+                    log::error!("Error turning log message into string:{}",e.to_string());
+                    continue;
+                },
+                Ok(lm) if self.regex.is_match(&lm) => {
+                    log::debug!("Matched this entry: {}",lm.to_string());
+                    self.handle_slack();
+                },
+                Ok(lm) => log::info!("regex not matched:{}",lm) //regex not matched
+            }
         }
     }
 }
