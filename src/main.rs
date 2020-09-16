@@ -11,7 +11,7 @@ use async_std::task;
 use yam_lib::configuration::Configuration;
 use yam_lib::mysql_mon::mysql_mon_start;
 use yam_lib::web_mon::web_mon_start;
-use yam_lib::log_mon::log_mon_start;
+//use yam_lib::log_mon::log_mon_start;
 use yam_lib::slack::start_slack_poster;
 
 
@@ -64,13 +64,13 @@ async fn main() {
         web_mon_start(ca,tx).await});
     handles.push(handle);
 
-    let ca = config_arc.clone();
+    /*let ca = config_arc.clone();
     let tx = slack_tx.clone();
     let mut log_handles = Vec::new();
     match log_mon_start(ca,tx) {
-        Err(_) => return,
+        Err(_) => log::info!("log monitor not started"),
         Ok(h) => log_handles.extend(h)
-    };
+    };*/
     
     for h in handles {
         let result = h.await;

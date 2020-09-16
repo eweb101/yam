@@ -1,4 +1,5 @@
 /target
 monitor.toml
+Cargo.lock
 .env
 src/*.swp
